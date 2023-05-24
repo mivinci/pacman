@@ -6,6 +6,7 @@
 #include <sys/select.h>
 #include <sys/time.h>
 #include <unistd.h>
+#include <time.h>
 
 #ifdef __APPLE__
 #include <termios.h>
@@ -184,16 +185,16 @@ struct ghost {
 };
 
 struct pacman {
-  char *buf;
-  int w, h;
-  int x, y;
-  int out;
-  int score;
+  char *buf; // internal array used to generate pacman::render.
+  int w, h; // shape of the map
+  int x, y; // position of the player
+  int out;  // file descriptor to render the entire game to
+  int score; // scores the player gets
 
-  char *render;
-  int len;
+  char *render; // like GPU memory used to render the entire game to pacman::out.
+  int len; // length of pacman::render
 
-  struct ghost *ghosts[5];
+  struct ghost ghosts[5];
   int ghosts_len;
 };
 
@@ -211,7 +212,7 @@ static struct ghost ghosts[] = {
 // TODO: fix the bug in ghost_move
 void ghost_move(struct pacman *p, int i) {
   char c;
-  struct ghost *g = p->ghosts[i];
+  struct ghost *g = p->ghosts+i;
   int px = p->x, py = p->y;
   int gx = g->x, gy = g->y;
   int nx = gx, ny = gy;
@@ -311,7 +312,7 @@ void pacman_init(struct pacman *p, const char *path) {
         ghost = ghosts + (c - 'A');
         ghost->x = i;
         ghost->y = h;
-        p->ghosts[p->ghosts_len] = ghost;
+        p->ghosts[p->ghosts_len] = *ghost;
         p->ghosts_len++;
       } else if (c == PLAYER) {
         p->x = i;
@@ -330,6 +331,11 @@ void pacman_init(struct pacman *p, const char *path) {
   fclose(fp);
 }
 
+void pacman_free(struct pacman *p) {
+  free(p->buf);
+  free(p->render);
+}
+
 static int render(struct pacman *p) {
   int i, j, n;
   char buf[64], c;
@@ -338,7 +344,7 @@ static int render(struct pacman *p) {
 
   p->len = 0;
   append(p, "\x1b[?251\x1b[H", 9);
-  n = sprintf(buf, "Pacman v0.0.1      得分: %.4d  位置: %.2d,%.2d\r\n",
+  n = sprintf(buf, "Pac-Man v0.0.1     得分: %.4d  位置: %.2d,%.2d\r\n",
               p->score, p->x, p->y);
   append(p, buf, n);
 
@@ -357,7 +363,7 @@ static int render(struct pacman *p) {
           append(p, "🟧", 4);
           break;
         case SPACE:
-          append(p, "◼️◼️", 12);
+          append(p, "\u200e\u200e", 6);
           break;
         case PLAYER:
           append(p, "😋", 4);
@@ -438,7 +444,7 @@ int main(int argc, char **argv) {
   while (1) {
     _rfds = rfds;
     tv.tv_sec = 1;
-    tv.tv_usec = 1000 / FR * 1000; // 2ms
+    tv.tv_usec = 1000 / FR * 1000;
     retval = select(1, &_rfds, NULL, NULL, &tv);
     if (retval < 0) {
       perror("select");
@@ -460,6 +466,6 @@ int main(int argc, char **argv) {
     }
   }
 done:
-  free(p.render);
+  pacman_free(&p);
   return 0;
 }
