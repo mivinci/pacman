@@ -155,9 +155,13 @@ int readkey(int fd) {
   }
 }
 
+#define GAME_OVER -10
+
 #define SPACE ' '
 #define WALL '#'
 #define PLAYER '.'
+
+#define GHOST_HUNGER 1 // set when ghost eats food
 
 #define append(p, b, n)                                                        \
   {                                                                            \
@@ -165,8 +169,8 @@ int readkey(int fd) {
     p->len += n;                                                               \
   }
 
-#define isdigit(c) (c >= '0' && c <= '9')
-#define isupper(c) (c >= 'A' && c <= 'Z')
+#define isfood(c) (c >= '0' && c <= '9')
+#define isghost(c) (c >= 'A' && c <= 'Z')
 
 #define at(p, x, y) ((p)->buf[(y) * (p)->w + (x)])
 #define player(p) at(p, p->x, p->y)
@@ -181,7 +185,10 @@ struct ghost {
   const char *p;
   uint8_t size;
   uint8_t speed;
+  uint8_t flag;
+  // field below only used at runtime
   int x, y;
+  char bypass;
 };
 
 struct pacman {
@@ -205,55 +212,49 @@ static struct food foods[] = {
 };
 
 static struct ghost ghosts[] = {
-    {"😈", 4, 1, 0, 0},
-    {"👹", 4, 4, 0, 0},
+    {"😈", 4, 1, 0},
+    {"👹", 4, 4, GHOST_HUNGER},
 };
 
-// TODO: fix the bug in ghost_move
-void ghost_move(struct pacman *p, int i) {
-  char c;
+// TODO: fix the bug in function ghost_move
+int ghost_move(struct pacman *p, int i) {
+  char c, next;
   struct ghost *g = p->ghosts+i;
   int px = p->x, py = p->y;
   int gx = g->x, gy = g->y;
   int nx = gx, ny = gy;
 
-  if (gx == px && gy == py) {
-    printf("Game over!");
-    exit(0);
-  }
+  if (gx == px && gy == py)
+    return GAME_OVER; // the player is eaten by a ghost.
 
-  if (rand() % 16 > 8)
-    return;
+  if (rand() % 2 == 0)
+    return 0;
 
   if (gx > px) {
     nx = gx - 1;
     if (at(p, nx, gy) != WALL) {
-      g->x = nx;
-      goto done;
+      goto update;
     }
   }
   if (gx < px) {
     nx = gx + 1;
     if (at(p, nx, gy) != WALL) {
-      g->x = nx;
-      goto done;
+      goto update;
     }
   }
   if (gy > py) {
     ny = gy - 1;
     if (at(p, gx, ny) != WALL) {
-      g->y = ny;
-      goto done;
+      goto update;
     }
   }
   if (gy < py) {
     ny = gy + 1;
     if (at(p, gx, ny) != WALL) {
-      g->y = ny;
-      goto done;
+      goto update;
     }
   }
-  // if not moving
+  // if not moving, choose a direction to go
   if (g->x == gx && g->y == gy) {
     if (at(p, gx - 1, gy) != WALL)
       g->x--;
@@ -267,10 +268,26 @@ void ghost_move(struct pacman *p, int i) {
       // no way to go, discard
     }
   }
+
+update:
+  g->x = nx;
+  g->y = ny;
 done:
   c = at(p, gx, gy);
-  at(p, gx, gy) = SPACE;
+  if (g->flag&GHOST_HUNGER) {
+    at(p, gx, gy) = SPACE;
+  } else {
+    at(p, gx, gy) = g->bypass;
+  }
+  next = at(p, g->x, g->y);
+  g->bypass = next;
+  if (isghost(next)) {
+    // if there's also a ghost at the next postion,
+    // what do we do?
+    return 0;
+  }
   at(p, g->x, g->y) = c;
+  return 0;
 }
 
 void pacman_init(struct pacman *p, const char *path) {
@@ -308,11 +325,12 @@ void pacman_init(struct pacman *p, const char *path) {
     memcpy(p->buf + (h * w), lp, w);
     for (i = 0; i < nr; i++) {
       c = lp[i];
-      if (isupper(c)) {
+      if (isghost(c)) {
         ghost = ghosts + (c - 'A');
         ghost->x = i;
         ghost->y = h;
-        p->ghosts[p->ghosts_len] = *ghost;
+        ghost->bypass = SPACE;
+        p->ghosts[p->ghosts_len] = *ghost; // copy
         p->ghosts_len++;
       } else if (c == PLAYER) {
         p->x = i;
@@ -325,7 +343,7 @@ void pacman_init(struct pacman *p, const char *path) {
 
   p->w = w;
   p->h = h;
-  p->render = (char *)malloc(w * h * 4 + 64);
+  p->render = (char *)malloc(w * h * 4 * 4 + 64);
 
   free(lp);
   fclose(fp);
@@ -351,10 +369,10 @@ static int render(struct pacman *p) {
   for (i = 0; i < p->h; i++) {
     for (j = 0; j < p->w; j++) {
       c = at(p, j, i);
-      if (isdigit(c)) {
+      if (isfood(c)) {
         food = foods + (c - '0');
         append(p, food->p, food->size);
-      } else if (isupper(c)) {
+      } else if (isghost(c)) {
         ghost = ghosts + (c - 'A');
         append(p, ghost->p, ghost->size);
       } else {
@@ -380,7 +398,7 @@ int next(struct pacman *p, int key) {
   int w = p->w, h = p->h;
   int x = p->x, y = p->y;
   int nx = x, ny = y;
-  int i;
+  int i, retval;
   char c;
   if (key != KEY_NULL) {
     switch (key) {
@@ -407,7 +425,7 @@ int next(struct pacman *p, int key) {
     }
     at(p, x, y) = SPACE;
     c = player(p);
-    if (isdigit(c)) {
+    if (isfood(c)) {
       p->score += foods[c - '0'].score;
     }
     player(p) = PLAYER;
@@ -415,7 +433,8 @@ int next(struct pacman *p, int key) {
 
   // move ghosts close to the player.
   for (i = 0; i < p->ghosts_len; i++) {
-    ghost_move(p, i);
+    if ((retval = ghost_move(p, i)) < 0)
+      return retval;
   }
   return render(p);
 }
@@ -443,7 +462,7 @@ int main(int argc, char **argv) {
 
   while (1) {
     _rfds = rfds;
-    tv.tv_sec = 1;
+    tv.tv_sec = 0;
     tv.tv_usec = 1000 / FR * 1000;
     retval = select(1, &_rfds, NULL, NULL, &tv);
     if (retval < 0) {
@@ -460,7 +479,15 @@ int main(int argc, char **argv) {
       key = KEY_NULL;
     }
     // handle next frame
-    if ((retval = next(&p, key)) < 0) {
+    retval = next(&p, key);
+    if (retval >= 0)
+      continue;
+    
+    switch (retval) {
+    case GAME_OVER:
+      printf("Game over!\r\n"); // we are still in raw mode.
+      goto done;
+    default:
       perror("next");
       exit(1);
     }
