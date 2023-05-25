@@ -13,8 +13,6 @@ Compile and run `pm.c`, that's it.
 cc pm.c && ./a.out
 ```
 
-The source code is also available at [git.sr.ht/~zz/pm](https://git.sr.ht/~zz/pm).
-
 ## Features
 
 - 🗺️ Custom map
@@ -22,4 +20,4 @@ The source code is also available at [git.sr.ht/~zz/pm](https://git.sr.ht/~zz/pm
 
 ## LICENSE
 
-Not licensed.
+The source code is MIT licensed and also available at [git.sr.ht/~zz/pm](https://git.sr.ht/~zz/pm).
