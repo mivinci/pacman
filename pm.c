@@ -155,13 +155,22 @@ int readkey(int fd) {
   }
 }
 
-#define GAME_OVER -10
+#define INF INT32_MAX
+
+#define GAME_WIN -10
+#define GAME_LOSE -11
+
+#define GHOST_HUNGER 1 // set when ghost eats food
+
+#define DIR_LEFT 1
+#define DIR_RIGHT 2
+#define DIR_UP 4
+#define DIR_DOWN 8
 
 #define SPACE ' '
 #define WALL '#'
 #define PLAYER '.'
 
-#define GHOST_HUNGER 1 // set when ghost eats food
 
 #define append(p, b, n)                                                        \
   {                                                                            \
@@ -175,13 +184,17 @@ int readkey(int fd) {
 #define at(p, x, y) ((p)->buf[(y) * (p)->w + (x)])
 #define player(p) at(p, p->x, p->y)
 
+#define dis(x1, y1, x2, y2) (abs(x1-x2)+abs(y1-y2)) // Manhanttan Distance
+
 struct food {
+  char c;
   const char *p;
   uint8_t size;
   uint8_t score;
 };
 
 struct ghost {
+  char c;
   const char *p;
   uint8_t size;
   uint8_t speed;
@@ -193,102 +206,117 @@ struct ghost {
 
 struct pacman {
   char *buf; // internal array used to generate pacman::render.
-  int w, h; // shape of the map
-  int x, y; // position of the player
-  int out;  // file descriptor to render the entire game to
-  int score; // scores the player gets
+  int w, h; // shape of the map.
+  int x, y; // position of the player.
+  int out;  // file descriptor to render the entire game to.
+  int score; // scores the player gets.
+  int goal;  // scores the player have to earn to win the game.
 
   char *render; // like GPU memory used to render the entire game to pacman::out.
   int len; // length of pacman::render
 
-  struct ghost ghosts[5];
+  struct ghost ghosts[12];
   int ghosts_len;
 };
 
 static struct food foods[] = {
-    {"🍪", 4, 1},
-    {"🍰", 4, 5},
-    {"🥩", 4, 10},
+    {'1', "💩", 4, 1},
+    {'2', "🍰", 4, 5},
+    {'3', "🥩", 4, 10},
+    {'4', "🍭", 4, 50},
 };
 
 static struct ghost ghosts[] = {
-    {"😈", 4, 1, 0},
-    {"👹", 4, 4, GHOST_HUNGER},
+    {'A', "😈", 4, 1, 0},
+    {'B', "👻", 4, 1, 0},
+    {'C', "👹", 4, 4, GHOST_HUNGER},
 };
 
 // TODO: fix the bug in function ghost_move
 int ghost_move(struct pacman *p, int i) {
-  char c, next;
   struct ghost *g = p->ghosts+i;
-  int px = p->x, py = p->y;
-  int gx = g->x, gy = g->y;
-  int nx = gx, ny = gy;
+  int px = p->x, py = p->y; // current player position
+  int gx = g->x, gy = g->y; // current ghost position
+  int d, move, cost = INF;
+  char n, l, r, t, b;
 
-  if (gx == px && gy == py)
-    return GAME_OVER; // the player is eaten by a ghost.
-
+  // we don't always have to move the ghosts
+  // to lower the difficulty of the game.
   if (rand() % 2 == 0)
     return 0;
 
-  if (gx > px) {
-    nx = gx - 1;
-    if (at(p, nx, gy) != WALL) {
-      goto update;
+  // see if it's shorter one step to the left.
+  l = at(p, gx-1, gy);
+  if (l != WALL) {
+    d = dis(gx-1, gy, px, py);
+    if (d < cost) {
+      cost = d;
+      move = DIR_LEFT;
     }
   }
-  if (gx < px) {
-    nx = gx + 1;
-    if (at(p, nx, gy) != WALL) {
-      goto update;
+  // see if it's shorter one step to the right.
+  r = at(p, gx+1, gy);
+  if (r != WALL) {
+    d = dis(gx+1, gy, px, py);
+    if (d < cost) {
+      cost = d;
+      move = DIR_RIGHT;
     }
   }
-  if (gy > py) {
-    ny = gy - 1;
-    if (at(p, gx, ny) != WALL) {
-      goto update;
+  // see if it's shorter one step to the top.
+  t = at(p, gx, gy-1);
+  if (t != WALL) {
+    d = dis(gx, gy-1, px, py);
+    if (d < cost) {
+      cost = d;
+      move = DIR_UP;
     }
   }
-  if (gy < py) {
-    ny = gy + 1;
-    if (at(p, gx, ny) != WALL) {
-      goto update;
-    }
-  }
-  // if not moving, choose a direction to go
-  if (g->x == gx && g->y == gy) {
-    if (at(p, gx - 1, gy) != WALL)
-      g->x--;
-    else if (at(p, gx + 1, gy) != WALL)
-      g->x++;
-    else if (at(p, gx, gy - 1) != WALL)
-      g->y--;
-    else if (at(p, gx, gy + 1)) {
-      g->y++;
-    } else {
-      // no way to go, discard
+  // see if it's shorter one step to the bottom.
+  b = at(p, gx, gy+1);
+  if (b != WALL) {
+    d = dis(gx, gy+1, px, py);
+    if (d < cost) {
+      cost = d;
+      move = DIR_DOWN;
     }
   }
 
-update:
-  g->x = nx;
-  g->y = ny;
-done:
-  c = at(p, gx, gy);
-  if (g->flag&GHOST_HUNGER) {
-    at(p, gx, gy) = SPACE;
-  } else {
-    at(p, gx, gy) = g->bypass;
+  // update the ghost coordinate with the direction we just chose.
+  switch (move) {
+  case DIR_LEFT:
+    g->x--;
+    n = l;
+    break;
+  case DIR_RIGHT:
+    g->x++;
+    n = r;
+    break;
+  case DIR_UP:
+    g->y--;
+    n = t;
+    break;
+  case DIR_DOWN:
+    g->y++;
+    n = b;
+    break;
   }
-  next = at(p, g->x, g->y);
-  g->bypass = next;
-  if (isghost(next)) {
-    // if there's also a ghost at the next postion,
-    // what do we do?
+
+  // if the player is caught by this ghost, game over.
+  if (n == PLAYER)
+    return GAME_LOSE;
+
+  // if the chosen position to move to stands also a ghost 
+  // and it's superior than the current one, we stand still.
+  if (isghost(n))
     return 0;
-  }
-  at(p, g->x, g->y) = c;
+
+  at(p, gx, gy) = g->bypass;
+  g->bypass = n;
+  at(p, g->x, g->y) = g->c;
   return 0;
 }
+
 
 void pacman_init(struct pacman *p, const char *path) {
   FILE *fp;
@@ -299,6 +327,7 @@ void pacman_init(struct pacman *p, const char *path) {
   int w = 0, h = 0;
   int i;
   struct ghost *ghost;
+  struct food *food;
 
   if ((fp = fopen(path, "r")) == NULL) {
     perror("fopen");
@@ -313,6 +342,7 @@ void pacman_init(struct pacman *p, const char *path) {
   p->x = p->y = 0;
   p->ghosts_len = 0;
   p->score = 0;
+  p->goal = 0;
   p->out = STDOUT_FILENO;
   p->len = 0;
 
@@ -335,6 +365,9 @@ void pacman_init(struct pacman *p, const char *path) {
       } else if (c == PLAYER) {
         p->x = i;
         p->y = h;
+      } else if (isfood(c)) {
+        food = foods + (c - '0');
+        p->goal += food->score;
       }
     }
 
@@ -362,7 +395,7 @@ static int render(struct pacman *p) {
 
   p->len = 0;
   append(p, "\x1b[?251\x1b[H", 9);
-  n = sprintf(buf, "Pac-Man v0.0.1     得分: %.4d  位置: %.2d,%.2d\r\n",
+  n = sprintf(buf, "Pac-Man v0.1   Scores: %.4d  Player: %.2d,%.2d\r\n",
               p->score, p->x, p->y);
   append(p, buf, n);
 
@@ -378,10 +411,10 @@ static int render(struct pacman *p) {
       } else {
         switch (c) {
         case WALL:
-          append(p, "🟧", 4);
+          append(p, "🟦", 4);
           break;
         case SPACE:
-          append(p, "\u200e\u200e", 6);
+          append(p, "  ", 2);
           break;
         case PLAYER:
           append(p, "😋", 4);
@@ -425,9 +458,10 @@ int next(struct pacman *p, int key) {
     }
     at(p, x, y) = SPACE;
     c = player(p);
-    if (isfood(c)) {
+    if (isfood(c))
       p->score += foods[c - '0'].score;
-    }
+    if (p->score == p->goal)
+      return GAME_WIN;
     player(p) = PLAYER;
   }
 
@@ -484,8 +518,11 @@ int main(int argc, char **argv) {
       continue;
     
     switch (retval) {
-    case GAME_OVER:
-      printf("Game over!\r\n"); // we are still in raw mode.
+    case GAME_LOSE:
+      printf("You lose!\r\n"); // we are still in raw mode.
+      goto done;
+    case GAME_WIN:
+      printf("You win!\r\n");
       goto done;
     default:
       perror("next");
